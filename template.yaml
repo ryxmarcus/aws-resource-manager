@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AWS Resource Manager - Tag-based EC2 and RDS scheduling automation.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.12
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  ResourceManagerApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration: true
+
+  ResourceManagerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Events:
+        StartResources:
+          Type: HttpApi
+          Properties:
+            Path: /resources/start
+            Method: POST
+            ApiId: !Ref ResourceManagerApi
+        StopResources:
+          Type: HttpApi
+          Properties:
+            Path: /resources/stop
+            Method: POST
+            ApiId: !Ref ResourceManagerApi
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ec2:StartInstances
+                - ec2:StopInstances
+                - ec2:DescribeInstances
+                - ec2:CreateTags
+                - rds:StartDBInstance
+                - rds:StopDBInstance
+                - rds:DescribeDBInstances
+                - rds:AddTagsToResource
+                - tag:GetResources
+              Resource: '*'
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ResourceManagerApi}.execute-api.${AWS::Region}.amazonaws.com"
