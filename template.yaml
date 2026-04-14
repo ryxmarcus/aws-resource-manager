@@ -47,6 +47,9 @@ Resources:
                 - rds:StopDBInstance
                 - rds:DescribeDBInstances
                 - rds:AddTagsToResource
+                - autoscaling:UpdateAutoScalingGroup
+                - autoscaling:DescribeAutoScalingGroups
+                - autoscaling:CreateOrUpdateTags
                 - tag:GetResources
               Resource: '*'
 

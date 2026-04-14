@@ -1,12 +1,12 @@
 # AWS Resource Manager
 
-Tag-based EC2 and RDS scheduling automation via AWS Lambda and API Gateway.
+Tag-based EC2, RDS, and Auto Scaling Group (ASG) scheduling automation via AWS Lambda and API Gateway.
 
 ## Architecture
 
 - **API Gateway (HTTP API):** Provides path-based routing for `/resources/start` and `/resources/stop`.
-- **Lambda Function:** Identifies resources based on tags and executes start/stop operations.
-- **IAM:** Least-privilege role for EC2, RDS, and Tagging operations.
+- **Lambda Function:** Identifies resources (EC2, RDS, ASG) based on tags and executes start/stop operations.
+- **IAM:** Least-privilege role for EC2, RDS, ASG, and Tagging operations.
 
 ## Setup & Deployment
 

@@ -12,6 +12,7 @@ logger.setLevel(logging.INFO)
 tagging_client = boto3.client('resourcegroupstaggingapi')
 ec2_client = boto3.client('ec2')
 rds_client = boto3.client('rds')
+asg_client = boto3.client('autoscaling')
 
 def get_tag_filters(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Convert JSON body tags into Resource Groups Tagging API filters."""
@@ -22,8 +23,6 @@ def get_tag_filters(body: Dict[str, Any]) -> List[Dict[str, Any]]:
             'Key': key,
             'Values': [value] if isinstance(value, str) else value
         })
-    # Default filter to ensure we only touch managed resources if desired
-    # For now, we trust the input filters
     return filters
 
 def handle_ec2(instance_id: str, action: str):
@@ -72,6 +71,48 @@ def handle_rds(db_id: str, arn: str, action: str):
         logger.error(f"Error handling RDS {db_id}: {str(e)}")
         return False, str(e)
 
+def handle_asg(asg_name: str, action: str):
+    """Update Auto Scaling Group capacity (0 for stop, 1 for start)."""
+    try:
+        if action == 'start':
+            asg_client.update_auto_scaling_group(
+                AutoScalingGroupName=asg_name,
+                MinSize=1,
+                DesiredCapacity=1
+            )
+            status = 'Started (Capacity 1)'
+        else:
+            asg_client.update_auto_scaling_group(
+                AutoScalingGroupName=asg_name,
+                MinSize=0,
+                DesiredCapacity=0
+            )
+            status = 'Stopped (Capacity 0)'
+        
+        # Update Tags
+        asg_client.create_or_update_tags(
+            Tags=[
+                {
+                    'ResourceId': asg_name,
+                    'ResourceType': 'auto-scaling-group',
+                    'Key': 'LastAction',
+                    'Value': status,
+                    'PropagateAtLaunch': True
+                },
+                {
+                    'ResourceId': asg_name,
+                    'ResourceType': 'auto-scaling-group',
+                    'Key': 'LastActionTime',
+                    'Value': datetime.datetime.utcnow().isoformat(),
+                    'PropagateAtLaunch': True
+                }
+            ]
+        )
+        return True, status
+    except Exception as e:
+        logger.error(f"Error handling ASG {asg_name}: {str(e)}")
+        return False, str(e)
+
 def lambda_handler(event, context):
     logger.info(f"Event: {json.dumps(event)}")
     
@@ -94,12 +135,10 @@ def lambda_handler(event, context):
     }
 
     try:
-        # Find resources matching tags
-        # We filter for EC2 instances and RDS instances specifically
         paginator = tagging_client.get_paginator('get_resources')
         page_iterator = paginator.paginate(
             TagFilters=tag_filters,
-            ResourceTypeFilters=['ec2:instance', 'rds:db']
+            ResourceTypeFilters=['ec2:instance', 'rds:db', 'autoscaling:autoScalingGroup']
         )
 
         for page in page_iterator:
@@ -112,6 +151,9 @@ def lambda_handler(event, context):
                 elif ':rds:' in arn:
                     db_id = arn.split(':')[-1]
                     success, msg = handle_rds(db_id, arn, action)
+                elif ':autoscaling:' in arn:
+                    asg_name = arn.split('/')[-1]
+                    success, msg = handle_asg(asg_name, action)
                 else:
                     logger.warning(f"Unsupported resource type: {arn}")
                     continue
