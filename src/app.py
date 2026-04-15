@@ -113,9 +113,92 @@ def handle_asg(asg_name: str, action: str):
         logger.error(f"Error handling ASG {asg_name}: {str(e)}")
         return False, str(e)
 
+def handle_tag(id: str, arn: str, key: str, value: str):
+    """Apply a tag to a resource."""
+    try:
+        if id.startswith('i-'):
+            ec2_client.create_tags(Resources=[id], Tags=[{'Key': key, 'Value': value}])
+        elif ':rds:' in arn:
+            rds_client.add_tags_to_resource(ResourceName=arn, Tags=[{'Key': key, 'Value': value}])
+        elif ':autoscaling:' in arn:
+            asg_client.create_or_update_tags(
+                Tags=[{
+                    'ResourceId': id,
+                    'ResourceType': 'auto-scaling-group',
+                    'Key': key,
+                    'Value': value,
+                    'PropagateAtLaunch': True
+                }]
+            )
+        else:
+            return False, "Unknown resource type for tagging"
+        return True, f"Tagged {key}={value}"
+    except Exception as e:
+        logger.error(f"Error tagging {id}: {str(e)}")
+        return False, str(e)
+
 def lambda_handler(event, context):
     logger.info(f"Event: {json.dumps(event)}")
     
+    path_params = event.get('pathParameters', {})
+    direct_id = path_params.get('id')
+    direct_action = path_params.get('action')
+    tag_key = path_params.get('key')
+    tag_value = path_params.get('value')
+
+    if direct_id:
+        # Determine ARN and handle based on ID
+        # EC2 prefix check
+        if direct_id.startswith('i-'):
+            arn = f"arn:aws:ec2:*:*:instance/{direct_id}"
+            resource_type = 'ec2'
+        else:
+            # Check if it is RDS
+            try:
+                rds_resp = rds_client.describe_db_instances(DBInstanceIdentifier=direct_id)
+                arn = rds_resp['DBInstances'][0]['DBInstanceArn']
+                resource_type = 'rds'
+            except:
+                # Fallback to ASG
+                try:
+                    asg_resp = asg_client.describe_auto_scaling_groups(AutoScalingGroupNames=[direct_id])
+                    if asg_resp['AutoScalingGroups']:
+                        arn = asg_resp['AutoScalingGroups'][0]['AutoScalingGroupARN']
+                        resource_type = 'asg'
+                    else:
+                        raise Exception("ASG not found")
+                except:
+                    return {'statusCode': 404, 'body': json.dumps({'error': f"Resource {direct_id} not found as EC2, RDS, or ASG"})}
+
+        if tag_key and tag_value:
+            success, msg = handle_tag(direct_id, arn, tag_key, tag_value)
+            results = {
+                'action': 'tag',
+                'processed': [{'arn': arn, 'status': msg}] if success else [],
+                'failed': [{'arn': arn, 'error': msg}] if not success else []
+            }
+            return {'statusCode': 200, 'body': json.dumps(results)}
+
+        if direct_action:
+            action = direct_action.lower()
+            if action not in ['start', 'stop']:
+                return {'statusCode': 400, 'body': json.dumps({'error': 'Invalid action. Use "start" or "stop".'})}
+
+            if resource_type == 'ec2':
+                success, msg = handle_ec2(direct_id, action)
+            elif resource_type == 'rds':
+                success, msg = handle_rds(direct_id, arn, action)
+            elif resource_type == 'asg':
+                success, msg = handle_asg(direct_id, action)
+
+            results = {
+                'action': action,
+                'processed': [{'arn': arn, 'status': msg}] if success else [],
+                'failed': [{'arn': arn, 'error': msg}] if not success else []
+            }
+            return {'statusCode': 200, 'body': json.dumps(results)}
+
+    # Tag-based filtering (existing logic)
     path = event.get('rawPath', '')
     action = 'start' if '/start' in path else 'stop'
     
